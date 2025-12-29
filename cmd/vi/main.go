@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/manojVivek/go-vim/internal/editor"
-	"github.com/manojVivek/go-vim/internal/logger"
+	"github.com/gg582/gim/internal/editor"
+	"github.com/gg582/gim/internal/logger"
 )
 
 func main() {

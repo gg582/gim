@@ -1,14 +1,26 @@
 package editor
 
-import terminal "github.com/manojVivek/go-vim/internal/screen"
+import (
+	terminal "github.com/gg582/gim/internal/screen"
+)
 
 func (e *Editor) syncTextFrame(dontSyncCursor bool) {
-
 	textFrame := e.fillTextFrameFromTop()
-
 	textFrame = e.fillEmptyLinesIfAnyWithTilde(textFrame)
 
-	e.screen.DisplayTextFrame(textFrame)
+	// Theme-aware draw (fallback to old API if styled API not available yet)
+	if e.screen != nil && e.theme != nil {
+		if hl, ok := e.theme.ResolveGroup("Normal"); ok {
+			st := toTCellStyle(hl)
+			// You must implement this new method in internal/screen/screen.go
+			e.screen.DisplayTextFrameStyled(textFrame, st)
+		} else {
+			e.screen.DisplayTextFrame(textFrame)
+		}
+	} else {
+		e.screen.DisplayTextFrame(textFrame)
+	}
+
 	if dontSyncCursor == false {
 		e.syncCursor()
 	}
@@ -78,9 +90,22 @@ func (e *Editor) syncCursor() {
 }
 
 func (e *Editor) syncStatusBar() {
+	// statusMessage has priority
+	text := e.currentCommand
 	if len(e.statusMessage) > 0 {
-		e.screen.DisplayStatusBar(e.statusMessage)
-		return
+		text = e.statusMessage
 	}
-	e.screen.DisplayStatusBar(e.currentCommand)
+
+	// Theme-aware status bar
+	if e.screen != nil && e.theme != nil {
+		if hl, ok := e.theme.ResolveGroup("StatusLine"); ok {
+			st := toTCellStyle(hl)
+			// You must implement this new method in internal/screen/screen.go
+			e.screen.DisplayStatusBarStyled(text, st)
+			return
+		}
+	}
+
+	// Fallback
+	e.screen.DisplayStatusBar(text)
 }

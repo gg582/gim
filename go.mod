@@ -1,4 +1,4 @@
-module github.com/manojVivek/go-vim
+module github.com/gg582/gim
 
 go 1.14
 

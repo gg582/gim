@@ -1,17 +1,21 @@
 package editor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
-	"github.com/manojVivek/go-vim/internal/logger"
+	"github.com/gg582/gim/internal/logger"
 
 	"github.com/gdamore/tcell"
-	"github.com/manojVivek/go-vim/internal/actions"
-	"github.com/manojVivek/go-vim/internal/fs"
-	terminal "github.com/manojVivek/go-vim/internal/screen"
+	"github.com/gg582/gim/internal/actions"
+	"github.com/gg582/gim/internal/fs"
+	terminal "github.com/gg582/gim/internal/screen"
+	"github.com/gg582/gim/internal/theme"
 )
 
 type mode string
@@ -45,6 +49,8 @@ type Editor struct {
 	screen                   *terminal.Screen
 	isDirty                  bool
 	userEventChannel         chan actions.Event
+
+	theme *theme.Theme
 }
 
 // NewEditor is a contructor function for the Editor
@@ -76,6 +82,10 @@ func NewEditor(f string) (Editor, error) {
 		return e, err
 	}
 	e.screen = s
+
+	// Load theme from ~/.govimrc and apply Normal as default screen style (best-effort).
+	e.loadThemeFromGovimrc()
+
 	e.syncTextFrame(false)
 	e.syncCursor()
 	e.syncStatusBar()
@@ -352,3 +362,136 @@ func (e *Editor) handleKeyInsertMode(event actions.Event) {
 		e.syncTextFrame(false)
 	}
 }
+
+/*
+Theme loading / applying
+*/
+
+func (e *Editor) loadThemeFromGovimrc() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	rcPath := filepath.Join(home, ".govimrc")
+	themeName, bg, ok := parseGovimrc(rcPath)
+	if !ok || themeName == "" {
+		return
+	}
+
+	themePath := filepath.Join(home, ".govim", "colors", themeName+".vim")
+	f, err := os.Open(themePath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	th, err := theme.ParseVimColorscheme(f)
+	if err != nil {
+		return
+	}
+
+	if bg != "" {
+		th.Background = bg
+	}
+
+	e.theme = th
+	e.applyThemeToScreenDefault()
+}
+
+func parseGovimrc(path string) (themeName string, background string, ok bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", false
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+
+		// Full-line vim comment
+		if strings.HasPrefix(line, "\"") {
+			continue
+		}
+
+		// Strip trailing comment starting with "
+		if i := strings.Index(line, "\""); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+			if line == "" {
+				continue
+			}
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		switch fields[0] {
+		case "colorscheme", "colo":
+			if len(fields) >= 2 {
+				themeName = fields[1]
+				ok = true
+			}
+		case "set":
+			// set background=dark
+			if len(fields) >= 2 && strings.HasPrefix(fields[1], "background=") {
+				background = strings.TrimPrefix(fields[1], "background=")
+			}
+		}
+	}
+
+	// Ignore scanner error for config
+	return themeName, background, ok
+}
+
+func (e *Editor) applyThemeToScreenDefault() {
+	if e.theme == nil || e.screen == nil {
+		return
+	}
+
+	hl, ok := e.theme.ResolveGroup("Normal")
+	if !ok {
+		return
+	}
+
+	st := toTCellStyle(hl)
+	scr := e.screen.TerminalScreen()
+	scr.SetStyle(st)
+	scr.Clear()
+	scr.Sync()
+}
+
+func toTCellColor(c theme.Color) tcell.Color {
+	switch c.Kind {
+	case theme.COLOR_RGB:
+		return tcell.NewRGBColor(int32(c.Red), int32(c.Green), int32(c.Blue))
+	case theme.COLOR_INDEX:
+		return tcell.PaletteColor(c.Index)
+	default:
+		return tcell.ColorDefault
+	}
+}
+
+func toTCellStyle(hl theme.TextHighlight) tcell.Style {
+	st := tcell.StyleDefault.
+		Foreground(toTCellColor(hl.Foreground)).
+		Background(toTCellColor(hl.Background))
+
+	if hl.TxtStyle.Bold {
+		st = st.Bold(true)
+	}
+	if hl.TxtStyle.Underline {
+		st = st.Underline(true)
+	}
+	if hl.TxtStyle.Reverse {
+		st = st.Reverse(true)
+	}
+	// Italic is not reliably supported across terminals/tcell versions, so skip.
+	return st
+}
+
